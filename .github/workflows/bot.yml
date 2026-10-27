@@ -1,0 +1,64 @@
+name: Bot Telegram 24/7
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: bot-telegram
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  turno:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - name: Bajar el codigo del bot
+        uses: actions/checkout@v4
+
+      - name: Clonar la boveda privada
+        run: |
+          git clone "https://x-access-token:${{ secrets.VAULT_PAT }}@github.com/michi0009/mi-boveda.git" vault
+          git -C vault config user.name "obsidian-telegram-bot"
+          git -C vault config user.email "bot@users.noreply.github.com"
+
+      - name: Instalar Python y dependencias
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - run: pip install -r requirements.txt
+
+      - name: Ejecutar el bot durante este turno
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: "gemini-3.5-flash-lite"
+          ALLOWED_CHAT_ID: ${{ secrets.ALLOWED_CHAT_ID }}
+          VAULT_PATH: ${{ github.workspace }}/vault
+          ATTACHMENTS_DIR: "Adjuntos"
+          TUTOR_MODE: "false"
+          MAX_RUNTIME_MINUTES: "340"
+        run: python telegram_bot.py
+
+      - name: Subir cambios pendientes de la boveda
+        if: always()
+        run: |
+          cd vault
+          git add -A
+          git commit -m "bot: cambios del turno $(date -u +%Y-%m-%dT%H:%MZ)" || echo "nada que commitear"
+          git push || echo "push pendiente para el proximo turno"
+
+      - name: Despachar el siguiente turno
+        if: always()
+        run: |
+          curl -sf -X POST \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/bot.yml/dispatches" \
+            -d "{\"ref\":\"${{ github.ref_name }}\"}" || echo "el cron de 6 h hara de relevo"
